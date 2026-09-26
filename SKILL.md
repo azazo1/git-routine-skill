@@ -69,3 +69,10 @@ kw: commit / commit message
 tag 描述不要仅根据 commits 描述来编写, 你不清楚的地方需要深入到 commits 更改来确定.
 
 - 更加具体的编写查看 <https://github.com/azazo1/create-github-release-flow>, tag push 时必须查看其内容, 你也可以查看可能在本地安装了的对应 dsh skill. 上面的描述仅供参考, 具体以 skill 中的介绍为准.
+
+## CI
+
+push commit 或 tag 之后 CI 已经被触发, 不要在前台干等或者轮询:
+
+- 把 `gh run watch` 放到后台任务里跑, 它结束就意味着 CI 结束, 期间接着做其他工作, 或者等它的完成通知.
+- 失败的时候再用 `gh run view` 查看具体原因.
