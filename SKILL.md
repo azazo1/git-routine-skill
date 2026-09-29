@@ -72,7 +72,9 @@ tag 描述不要仅根据 commits 描述来编写, 你不清楚的地方需要�
 
 ## CI
 
-push commit 或 tag 之后 CI 已经被触发, 用轮询跟, 不要用 `gh run watch`: 它在非交互环境 (agent 的后台任务, 没有 tty) 里不会收尾, run 已经 `completed/success` 了进程还在空转, 只能外部 kill. 它在人类自己的终端里才正常.
+push commit 或 tag 之后 CI 已经被触发, 跟 CI 用后台任务, 不要用 `gh run watch`: 它在非交互环境 (agent 的后台任务, 没有 tty) 里不会收尾, run 已经 `completed/success` 了进程还在空转, 只能外部 kill. 它在人类自己的终端里才正常.
+
+把等待放进一个后台任务里: 任务内部自己循环查状态, 查到终态 (或到达次数上限) 就退出并打印结果. 这个后台任务启动之后, 不要在 agent 侧反复调用 `job_output` 之类的工具去轮询, harness 会在后台任务结束时自动提醒, 收到提醒之后再收集输出即可. 等待期间去做别的不依赖 CI 结果的事情, 不要空转.
 
 ```shell
 # 认领这次运行: 按本地短 hash 对上, 不要只取最新一条 (并发触发时会拿错)
@@ -84,4 +86,18 @@ gh run view <id> --log-failed
 gh run download <id> --pattern '*<平台与变体段>*' --dir <目录>
 ```
 
-要像 watch 那样每几秒刷一屏, 就用循环包住第二条并加次数上限 (bash `for i in $(seq 40); do ...; sleep 15; done`, PowerShell `for ($i=0; $i -lt 40; $i++) { ...; Start-Sleep 15 }`); 这类分钟级等待放后台任务, 不要在前台死等. `--log-failed` 给的是失败 job 的日志尾部, 别去拉全量日志; 产物名里的版本段可能带短 hash, 不要写死; `--dir` 下会按 artifact 名再建一层目录.
+后台任务里的等待循环大致这样 (次数上限按 CI 的典型耗时设, 15 秒一次足够, 不要查得太密):
+
+```shell
+# 后台任务入口: 循环到终态就退出, 每轮打印状态, 便于事后看卡在哪一步
+for i in $(seq 40); do
+    s=$(gh run view <id> --json status,conclusion --jq '.status + "/" + (.conclusion // "-")')
+    echo "$(date +%T) round=$i $s"
+    case $s in completed/*) break ;; esac
+    sleep 15
+done
+```
+
+PowerShell 等价写法: `for ($i=0; $i -lt 40; $i++) { ...; Start-Sleep 15 }`.
+
+这样的分钟级等待放后台任务, 不要在前台死等, 也不要拆成一次次的单独查询. 收到提醒之后再按需要补 `--json jobs`, `--log-failed`, `--dir` 取产物. `--log-failed` 给的是失败 job 的日志尾部, 别去拉全量日志; 产物名里的版本段可能带短 hash, 不要写死; `--dir` 下会按 artifact 名再建一层目录.
