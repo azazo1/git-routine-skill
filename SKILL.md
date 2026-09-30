@@ -78,28 +78,54 @@ push commit 或 tag 之后 CI 已经被触发, 跟 CI 用后台任务, 不要用
 
 后台任务起来之后, 先告知用户 CI 观察正在后台进行, 然后停止工具调用, 不要出现 `趁 CI 正在执行过程中, 我来...` 这类动作: 不等 CI 结果的事情也留到收到通知之后再做, 安静等 CI 完成的自动通知即可.
 
-```shell
-# 认领这次运行: 按本地短 hash 对上, 不要只取最新一条 (并发触发时会拿错)
-gh run list --limit 5 --json databaseId,headSha,status,conclusion --jq '.[] | "\(.databaseId) \(.headSha[0:7]) \(.status)/\(.conclusion)"'
-# 状态 / 逐 job 进度 / 失败日志 / 取产物 (id 换成上面认领到的)
-gh run view <id> --json status,conclusion --jq '.status + "/" + (.conclusion // "-")'
-gh run view <id> --json jobs --jq '.jobs[] | "\(.name) \(.status)/\(.conclusion)"'
-gh run view <id> --log-failed
-gh run download <id> --pattern '*<平台与变体段>*' --dir <目录>
-```
+观察 CI 要尽量只用不需要提权的只读动作: `gh run list` / `gh run view` / `gh api .../logs` / `gh run download` 都是读取, 直接跑即可, 不要因为习惯而提权 (提权会阻塞整个 agent 线程). 另外统一显式带上 `-R <owner/repo>`, 这样不依赖 cwd 也不必先 cd 进仓库.
 
-后台任务里的等待循环大致这样 (次数上限按 CI 的典型耗时设, 15 秒一次足够, 不要查得太密):
+下面是后台任务入口的参考实现: 认领本次运行 (按本地短 hash 对上, 不要只取最新一条, 并发触发时会拿错), 等终态, 再逐 job 汇报, 失败的 job 拉日志到 `.tmp/ci/` 并只摘出关键错误行. 次数上限按 CI 的典型耗时设, 15 秒一次足够, 不要查得太密.
 
 ```shell
-# 后台任务入口: 循环到终态就退出, 每轮打印状态, 便于事后看卡在哪一步
-for i in $(seq 40); do
-    s=$(gh run view <id> --json status,conclusion --jq '.status + "/" + (.conclusion // "-")')
+repo=<owner/repo>
+branch=<触发 CI 的分支>
+sha=$(git rev-parse HEAD | cut -c1-7)
+echo "claiming run for $sha"
+
+# 认领: 轮询到出现本次 hash 的运行为止
+id=
+for _ in $(seq 20); do
+    id=$(gh run list -R "$repo" --branch "$branch" --limit 10 --json databaseId,headSha \
+        --jq ".[] | select(.headSha | startswith(\"$sha\")) | .databaseId" | head -1)
+    [ -n "$id" ] && break
+    sleep 15
+done
+[ -n "$id" ] || { echo "ERROR: 未认领到 $sha 的运行"; exit 1; }
+echo "claimed run $id"
+
+# 等终态, 每轮打印状态便于事后看卡在哪一步
+for i in $(seq 60); do
+    s=$(gh run view -R "$repo" "$id" --json status,conclusion --jq '.status + "/" + (.conclusion // "-")')
     echo "$(date +%T) round=$i $s"
     case $s in completed/*) break ;; esac
     sleep 15
 done
+
+echo '=== jobs ==='
+gh run view -R "$repo" "$id" --json jobs --jq '.jobs[] | "\(.name) \(.status)/\(.conclusion)"'
+
+# 失败的 job: 日志落到 .tmp/ci/, 只摘关键错误行, 不把全量日志倒进上下文
+mkdir -p .tmp/ci
+for j in $(gh run view -R "$repo" "$id" --json jobs --jq '.jobs[] | select(.conclusion=="failure") | .databaseId'); do
+    file=".tmp/ci/fail-$j.log"
+    gh api "/repos/$repo/actions/jobs/$j/logs" > "$file" 2>/dev/null
+    echo "=== failed job $j ==="
+    errs=$(grep -nE 'Error:|error:|FAILURE|##\[error\]|^e: ' "$file" | head -30)
+    if [ -n "$errs" ]; then echo "$errs"; else tail -20 "$file"; fi
+done
+echo 'WAIT DONE'
 ```
 
-PowerShell 等价写法: `for ($i=0; $i -lt 40; $i++) { ...; Start-Sleep 15 }`.
+要点:
 
-这样的分钟级等待放后台任务, 不要在前台死等, 也不要拆成一次次的单独查询. 收到提醒之后再按需要补 `--json jobs`, `--log-failed`, `--dir` 取产物. `--log-failed` 给的是失败 job 的日志尾部, 别去拉全量日志; 产物名里的版本段可能带短 hash, 不要写死; `--dir` 下会按 artifact 名再建一层目录.
+- 脚本最后打印 `WAIT DONE`, 看到它就说明后台任务已经收尾, 不必怀疑是否中途退出.
+- 用 `gh api .../jobs/<job-id>/logs` 精细取失败 job 的日志, 比 `gh run view --log-failed` 更可控; 全量日志只落盘, 进上下文的只有摘出来的错误行 (没有匹配时退回最后 20 行).
+- 取产物另用 `gh run download -R "$repo" "$id" --pattern '*<平台与变体段>*' --dir <目录>`, 产物名里的版本段可能带短 hash, 不要写死; `--dir` 下会按 artifact 名再建一层目录.
+- 若沙箱内确实因为缺少认证而失败, 才按提权规则重试一次, 不要默认提权.
+- 这样的分钟级等待整块放后台任务, 不要在前台死等, 也不要拆成一次次的单独查询. PowerShell 用户把等待循环写成 `for ($i=0; $i -lt 60; $i++) { ...; Start-Sleep 15 }` 即可, 判断逻辑与上面一致.
