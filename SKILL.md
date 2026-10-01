@@ -1,6 +1,6 @@
 ---
 name: git-routine-skill
-description: commit message 编写与 tag 发布的日常 git 流程规范. 当用户使用 commit / commit message 关键词要求提交, 或以 commit doit / commit ex / commit fast / commit only 要求直接提交, 或要求打 tag, push tag 时使用.
+description: commit message 编写与 tag 发布的日常 git 流程规范. 当用户使用 commit / commit message 关键词要求提交, 或以 commit doit / commit ex / commit fast / commit only 要求直接提交, 或要求打 tag, push tag, 以及观察 ci 执行情况时使用.
 ---
 
 # git 日常流程
