@@ -9,7 +9,7 @@ description: commit message 编写与 tag 发布的日常 git 流程规范. 当�
 
 kw: commit / commit message
 
-你不需要真正地执行 commit 命令, 只需要给出 commit message 内容和其等价的 commit 命令, 两者均需单独给出.
+通常无需你自己执行提交, 这次提交由用户自己执行, 需要给出 commit message 内容和其等价的 commit 命令, 两者均需单独给出, 用户可能在你的 message 基础上自行调整后执行 (只有 `commit doit` 等子模式才由你动手执行).
 
 - 你应遵循 Conventional Commits, 查看过往的 commit messages 都是怎么构建的并参考, 然后根据当前的 staged 的代码编写 message. 注意不要假设上一个你提供的 commit message 用户提交与否, 检查历史 commits, 无论第几次.
   - 查看过往的 commit 的时候, 不应该使用 oneline, 而是要看全其 commit message.
