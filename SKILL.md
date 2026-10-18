@@ -1,17 +1,17 @@
 ---
 name: git-routine-skill
-description: commit message 编写与 tag 发布的日常 git 流程规范. 当用户使用 commit / commit message 关键词要求提交, 或以 commit doit / commit ex / commit fast / commit only 要求直接提交或 push, 或要求打 tag, push tag, 以及观察 ci 执行情况时使用.
+description: commit message 编写与 tag 发布的日常 git 流程规范. 当用户使用 commit / cm / commit message 关键词要求提交, 或以 commit ro / commit fast / commit only 调整提交方式与范围, 或要求打 tag, push tag, 以及观察 ci 执行情况时使用.
 ---
 
 # git 日常流程
 
 ## commit
 
-kw: commit / commit message
+kw: commit / cm / commit message
 
-通常无需你自己执行提交, 这次提交由用户自己执行, 需要给出 commit message 内容和其等价的 commit 命令, 两者均需单独给出, 用户可能在你的 message 基础上自行调整后执行 (只有 `commit doit` 等子模式才由你动手执行).
+需要给出 commit message 内容和其等价的 commit 命令, 两者均需单独给出, 然后提权执行提交.
 
-- 你应遵循 Conventional Commits, 查看过往的 commit messages 都是怎么构建的并参考, 然后根据当前的 staged 的代码编写 message. 注意不要假设上一个你提供的 commit message 用户提交与否, 检查历史 commits, 无论第几次.
+- 你应遵循 Conventional Commits, 查看过往的 commit messages 都是怎么构建的并参考, 然后根据当前的 staged 的代码编写 message. 注意不要假设上一次给出的 commit message 已经提交, 检查历史 commits, 无论第几次.
   - 查看过往的 commit 的时候, 不应该使用 oneline, 而是要看全其 commit message.
 - 你的 message 不应该只是一句抽象的话语, 应该注重于代码更改解决了什么具体的问题 / 实现了什么具体的功能, 用词应该简单而精准且具有辨识度, 不要使用生词难词, 便于在多个提交当中一眼辨识出当前提交的作用.
 - 必须 git diff 之类的命令, 查看代码的精确修改, 防止遗漏用户自己的修改或者由于上下文差异导致信息偏差.
@@ -46,12 +46,12 @@ kw: commit / commit message
 
   中, 在 123 这行后面缺少了一个换行.
 - 不要在 commit message 中放置 `\n` 代替原始的换行符, 就是说不要使用 `-m "-a\n-b"` 这样的方式糊弄换行.
-- 当你给出 message 和等效命令的时候, 用户可能会自己复制然后执行而并没有事后和你通知, 后续工作可能需要重新检查 git 状态.
 - 先给 message, 再给等效命令, 不要反过来.
+- 提交完成后, 后续工作可能需要重新检查 git 状态.
 
-### commit doit / commit ex
+### commit ro
 
-`commit doit`, `commit ex(ec)` 等, 请先输出 commit message, 然后直接尝试提权执行 git commit.
+`commit ro`: 只给出 commit message 和等效命令, 不执行提交, 也不修改暂存区和代码.
 
 ### commit fast
 
@@ -63,7 +63,7 @@ kw: commit / commit message
 
 ## tags
 
-如果用户要求你使用新的版本号打 tag, 那么在打 tag 之前需要查阅距离上一个 tag, 项目做了什么更改, 总结所有的更改之后补充 tag 的描述, 不要过于简短, 可以参考成熟的仓库是如何编写 release notes 的, 然后检查项目文件中的版本号是否已经同步更新, 如果没有更新, 新建一个 commit 完成更新, 然后带着更新描述打 tag, 并且尝试 push, 仅此情况中对这些 git 的写操作都要提权运行, 不要尝试在沙箱中运行.
+如果用户要求你使用新的版本号打 tag, 那么在打 tag 之前需要查阅距离上一个 tag, 项目做了什么更改, 总结所有的更改之后补充 tag 的描述, 不要过于简短, 可以参考成熟的仓库是如何编写 release notes 的, 然后检查项目文件中的版本号是否已经同步更新, 如果没有更新, 新建一个 commit 完成更新, 然后带着更新描述打 tag, 并且尝试 push, 这些 git 的写操作都要提权运行, 不要尝试在沙箱中运行.
 
 如果用户让你 tag 但是没有指定版本号, 请你结合项目整体和过往修改, 自行决定语义版本号的变化.
 
