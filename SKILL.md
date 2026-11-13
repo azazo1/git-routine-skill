@@ -79,7 +79,69 @@ push commit 或 tag 之后 CI 已经被触发, 跟 CI 用后台任务, 不要用
 
 后台任务起来之后, 先告知用户 CI 观察正在后台进行, 然后停止工具调用, 不要出现 `趁 CI 正在执行过程中, 我来...` 这类动作: 不等 CI 结果的事情也留到收到通知之后再做, 安静等 CI 完成的自动通知即可.
 
-观察 CI 要尽量只用不需要提权的只读动作: `gh run list` / `gh run view` / `gh api .../logs` / `gh run download` 都是读取, 直接跑即可, 不要因为习惯而提权 (提权会阻塞整个 agent 线程). 这些查询本身不要求认证, 先在不提权的情况下实际执行, 只有实际执行失败 (例如被限流) 才考虑提权; 不要用 `gh auth status` 之类的探测结果预先推断查询会失败, 它可能报告 token 无效, 而只读查询仍然可用. 另外统一显式带上 `-R <owner/repo>`, 这样不依赖 cwd 也不必先 cd 进仓库.
+查 CI 状态优先用 `curl` 打 GitHub REST API 的匿名只读接口, 不依赖 gh 是否安装或已认证, 也不用担心 gh 的 token 状态. 匿名配额是每小时 60 次, 一次正常的 CI 观察 (认领 + 等终态 + 列 job) 通常十几个请求, 够用.
+
+- 只有被限流 (HTTP 403, 消息含 `API rate limit exceeded`, 或响应头 `x-ratelimit-remaining` 见底), 以及需要认证才能做的动作才改用下面的 gh 方式.
+- 失败 job 的日志必须认证: 匿名取 `/repos/<owner>/<repo>/actions/jobs/<job-id>/logs` 会直接 403 (`Must have admin rights to Repository`), 所以日志和产物一律走 gh 方式, 不要在这上面浪费配额.
+- 不要把 curl 和 gh 混成一个脚本, 两种方式各自独立成后台任务, 前者打印出限流信号之后再起后者.
+
+### 首选: curl 查状态
+
+认领本次运行 (按本地短 hash 对上, 不要只取最新一条, 并发触发时会拿错), 等终态, 再逐 job 汇报. 每轮顺带打印配额余量, 配额见底时脚本明确提示改用 gh 方式.
+
+```shell
+repo=<owner/repo>
+branch=<触发 CI 的分支>
+sha=$(git rev-parse HEAD | cut -c1-7)
+api=https://api.github.com/repos/$repo
+mkdir -p .tmp/ci
+echo "claiming run for $sha"
+
+# 取一页 JSON 落到文件, 同时留下响应头 (里面有余量), 打印 HTTP 状态码
+fetch() { curl -sS -m 20 -o "$1" -D "$1.headers" -w '%{http_code}' "$2"; }
+remain() { awk 'tolower($1)=="x-ratelimit-remaining:" {print $2}' "$1.headers" | tr -d '\r'; }
+
+# 认领: 轮询到出现本次 hash 的运行为止, 匿名配额下间隔不要比 10 秒更密
+id=
+for _ in $(seq 12); do
+    code=$(fetch .tmp/ci/runs.json "$api/actions/runs?branch=$branch&per_page=20")
+    [ "$code" = 403 ] && { echo "RATE LIMITED: $(cat .tmp/ci/runs.json)"; echo '改用下面的 gh 方式'; exit 2; }
+    id=$(python3 -c "import json; d=json.load(open('.tmp/ci/runs.json')); print(next((str(r['id']) for r in d.get('workflow_runs', []) if r['head_sha'].startswith('$sha')), ''))")
+    [ -n "$id" ] && break
+    sleep 10
+done
+[ -n "$id" ] || { echo "ERROR: 未认领到 $sha 的运行"; exit 1; }
+echo "claimed run $id quota=$(remain .tmp/ci/runs.json)"
+
+# 等终态: 每轮打印状态与剩余配额, 便于判断是卡住还是配额耗尽; 30 秒一次, 别查太密
+for i in $(seq 40); do
+    code=$(fetch .tmp/ci/run.json "$api/actions/runs/$id")
+    [ "$code" = 403 ] && { echo "RATE LIMITED: $(cat .tmp/ci/run.json)"; echo '改用下面的 gh 方式'; exit 2; }
+    s=$(python3 -c "import json; d=json.load(open('.tmp/ci/run.json')); print(d['status'] + '/' + (d.get('conclusion') or '-'))")
+    echo "$(date +%T) round=$i $s quota=$(remain .tmp/ci/run.json)"
+    case $s in completed/*) break ;; esac
+    sleep 30
+done
+
+echo '=== jobs ==='
+code=$(fetch .tmp/ci/jobs.json "$api/actions/runs/$id/jobs?per_page=100")
+python3 -c "import json; d=json.load(open('.tmp/ci/jobs.json')); [print(j['name'], j['status'] + '/' + (j['conclusion'] or '-'), j['id']) for j in d.get('jobs', [])]"
+python3 -c "import json; d=json.load(open('.tmp/ci/jobs.json')); [print('FAILED', j['name'], j['id']) for j in d.get('jobs', []) if j['conclusion'] == 'failure']"
+echo 'WAIT DONE'
+```
+
+要点:
+
+- JSON 和响应头都落在 `.tmp/ci/`, 每轮覆盖, 不要把原始 JSON 倒进上下文.
+- 匿名配额 60 次/小时, 认领与等待合计一般十几个请求; 循环上限和间隔按 CI 典型耗时设, 不要为了"快一点"把间隔压到 5 秒以下.
+- 脚本打印 `RATE LIMITED` 说明是配额问题而不是 CI 问题, 换下面的 gh 方式重跑即可, 不要盲目提权.
+- 看到 `FAILED <name> <id>` 之后, 日志按下面 gh 方式的日志段取, 只把摘出的错误行进上下文.
+- 只读查询不需要提权; 这里的 curl 更不需要, 不要因为习惯而提权.
+- Windows 上把 `python3` 换成 `python`.
+
+### 退路: gh 命令
+
+被限流, 或者需要日志 / 产物这类认证动作时用这一节. 观察 CI 要尽量只用不需要提权的只读动作: `gh run list` / `gh run view` / `gh api .../logs` / `gh run download` 都是读取, 直接跑即可, 不要因为习惯而提权 (提权会阻塞整个 agent 线程). 这些查询本身不要求认证, 先在不提权的情况下实际执行, 只有实际执行失败 (例如被限流) 才考虑提权; 不要用 `gh auth status` 之类的探测结果预先推断查询会失败, 它可能报告 token 无效, 而只读查询仍然可用. 另外统一显式带上 `-R <owner/repo>`, 这样不依赖 cwd 也不必先 cd 进仓库.
 
 下面是后台任务入口的参考实现: 认领本次运行 (按本地短 hash 对上, 不要只取最新一条, 并发触发时会拿错), 等终态, 再逐 job 汇报, 失败的 job 拉日志到 `.tmp/ci/` 并只摘出关键错误行. 次数上限按 CI 的典型耗时设, 15 秒一次足够, 不要查得太密.
 
